@@ -107,7 +107,8 @@ func Compress(exportDir string) error {
 	if err := zw.Close(); err != nil {
 		return err
 	}
-	zipName := exportDir + `/archive.zip`
+	timeStr := time.Now().Format("2006-01-02")
+	zipName := exportDir + `/` + timeStr + `_BrowserData.zip`
 	outFile, _ := os.Create(zipName)
 	_, err = b.WriteTo(outFile)
 	if err != nil {
