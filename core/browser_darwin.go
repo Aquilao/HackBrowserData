@@ -23,6 +23,8 @@ const (
 	operaProfilePath          = "/Users/*/Library/Application Support/com.operasoftware.Opera/"
 	operaGXProfilePath        = "/Users/*/Library/Application Support/com.operasoftware.OperaGX/"
 	vivaldiProfilePath        = "/Users/*/Library/Application Support/Vivaldi/*/"
+	sougouProfilePath         = "/AppData/Roaming/SogouExplorer/Webkit/*/"
+	sougouKeyPath             = "/AppData/Roaming/SogouExplorer/Webkit/Local State"
 )
 
 const (

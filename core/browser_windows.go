@@ -36,6 +36,8 @@ const (
 	operaGXKeyPath            = "/AppData/Roaming/Opera Software/Opera GX Stable/Local State"
 	vivaldiProfilePath        = "/AppData/Local/Vivaldi/User Data/Default/"
 	vivaldiKeyPath            = "/AppData/Local/Vivaldi/Local State"
+	sougouProfilePath         = "/AppData/Roaming/SogouExplorer/Webkit/*/"
+	sougouKeyPath             = "/AppData/Roaming/SogouExplorer/Webkit/Local State"
 )
 
 var (
@@ -127,6 +129,12 @@ var (
 			ProfilePath: os.Getenv("USERPROFILE") + vivaldiProfilePath,
 			KeyPath:     os.Getenv("USERPROFILE") + vivaldiKeyPath,
 			Name:        vivaldiName,
+			New:         NewChromium,
+		},
+		"sougou": {
+			ProfilePath: os.Getenv("USERPROFILE") + sougouProfilePath,
+			KeyPath:     os.Getenv("USERPROFILE") + sougouKeyPath,
+			Name:        sougouName,
 			New:         NewChromium,
 		},
 	}
