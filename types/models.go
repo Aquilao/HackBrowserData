@@ -26,7 +26,9 @@ type CookieEntry struct {
 
 // BookmarkEntry represents a single browser bookmark.
 type BookmarkEntry struct {
+	ID        int64     `json:"id" csv:"id"`
 	Name      string    `json:"name" csv:"name"`
+	Type      string    `json:"type" csv:"type"`
 	URL       string    `json:"url" csv:"url"`
 	Folder    string    `json:"folder" csv:"folder"`
 	CreatedAt time.Time `json:"created_at" csv:"created_at"`
@@ -52,6 +54,7 @@ type DownloadEntry struct {
 
 // CreditCardEntry represents a single saved credit card.
 type CreditCardEntry struct {
+	GUID     string `json:"guid" csv:"guid"`
 	Name     string `json:"name" csv:"name"`
 	Number   string `json:"number" csv:"number"`
 	ExpMonth string `json:"exp_month" csv:"exp_month"`
@@ -62,9 +65,10 @@ type CreditCardEntry struct {
 
 // StorageEntry represents a single key-value pair from local or session storage.
 type StorageEntry struct {
-	URL   string `json:"url" csv:"url"`
-	Key   string `json:"key" csv:"key"`
-	Value string `json:"value" csv:"value"`
+	IsMeta bool   `json:"is_meta" csv:"is_meta"`
+	URL    string `json:"url" csv:"url"`
+	Key    string `json:"key" csv:"key"`
+	Value  string `json:"value" csv:"value"`
 }
 
 // ExtensionEntry represents a single browser extension.
