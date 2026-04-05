@@ -1,24 +1,30 @@
 package crypto
 
 import (
+	"crypto/aes"
+	"crypto/des"
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/asn1"
-	"errors"
 )
 
-type ASN1PBE interface {
-	Decrypt(globalSalt []byte) ([]byte, error)
+const des3KeySize = 24 // 3DES uses 24-byte (192-bit) keys
 
-	Encrypt(globalSalt, plaintext []byte) ([]byte, error)
+// ASN1PBE represents a Password-Based Encryption structure from Firefox's NSS.
+// The key parameter semantics vary by implementation:
+//   - privateKeyPBE / passwordCheckPBE: key is the global salt used for key derivation
+//   - credentialPBE: key is the already-derived master key
+type ASN1PBE interface {
+	Decrypt(key []byte) ([]byte, error)
+	Encrypt(key, plaintext []byte) ([]byte, error)
 }
 
 func NewASN1PBE(b []byte) (pbe ASN1PBE, err error) {
 	var (
-		nss   nssPBE
-		meta  metaPBE
-		login loginPBE
+		nss   privateKeyPBE
+		meta  passwordCheckPBE
+		login credentialPBE
 	)
 	if _, err := asn1.Unmarshal(b, &nss); err == nil {
 		return nss, nil
@@ -29,12 +35,10 @@ func NewASN1PBE(b []byte) (pbe ASN1PBE, err error) {
 	if _, err := asn1.Unmarshal(b, &login); err == nil {
 		return login, nil
 	}
-	return nil, ErrDecodeASN1Failed
+	return nil, errDecodeASN1
 }
 
-var ErrDecodeASN1Failed = errors.New("decode ASN1 data failed")
-
-// nssPBE Struct
+// privateKeyPBE Struct
 //
 //	SEQUENCE (2 elem)
 //		OBJECT IDENTIFIER
@@ -42,52 +46,56 @@ var ErrDecodeASN1Failed = errors.New("decode ASN1 data failed")
 //			OCTET STRING (20 byte)
 //			INTEGER 1
 //	OCTET STRING (16 byte)
-type nssPBE struct {
+type privateKeyPBE struct {
 	AlgoAttr struct {
 		asn1.ObjectIdentifier
 		SaltAttr struct {
 			EntrySalt []byte
-			Len       int
+			KeyLen    int
 		}
 	}
 	Encrypted []byte
 }
 
-// Decrypt decrypts the encrypted password with the global salt.
-func (n nssPBE) Decrypt(globalSalt []byte) ([]byte, error) {
+func (n privateKeyPBE) Decrypt(globalSalt []byte) ([]byte, error) {
 	key, iv := n.deriveKeyAndIV(globalSalt)
-
 	return DES3Decrypt(key, iv, n.Encrypted)
 }
 
-func (n nssPBE) Encrypt(globalSalt, plaintext []byte) ([]byte, error) {
+func (n privateKeyPBE) Encrypt(globalSalt, plaintext []byte) ([]byte, error) {
 	key, iv := n.deriveKeyAndIV(globalSalt)
-
 	return DES3Encrypt(key, iv, plaintext)
 }
 
-// deriveKeyAndIV derives the key and initialization vector (IV)
-// from the global salt and entry salt.
-func (n nssPBE) deriveKeyAndIV(globalSalt []byte) ([]byte, []byte) {
-	salt := n.AlgoAttr.SaltAttr.EntrySalt
-	hashPrefix := sha1.Sum(globalSalt)
-	compositeHash := sha1.Sum(append(hashPrefix[:], salt...))
-	paddedEntrySalt := paddingZero(salt, 20)
+// deriveKeyAndIV implements NSS PBE-SHA1-3DES key derivation.
+// Reference: https://searchfox.org/mozilla-central/source/security/nss/lib/softoken/lowpbe.c
+//
+// Derivation steps:
+//
+//	hp    = SHA1(globalSalt)
+//	ck    = SHA1(hp || entrySalt)
+//	hmac1 = HMAC-SHA1(ck, paddedSalt)
+//	k1    = HMAC-SHA1(ck, paddedSalt || entrySalt)
+//	k2    = HMAC-SHA1(ck, hmac1 || entrySalt)
+//	dk    = k1 || k2  (40 bytes)
+//	key   = dk[:24], iv = dk[32:]
+func (n privateKeyPBE) deriveKeyAndIV(globalSalt []byte) ([]byte, []byte) {
+	entrySalt := n.AlgoAttr.SaltAttr.EntrySalt
+	hp := sha1.Sum(globalSalt)
+	ck := sha1.Sum(append(hp[:], entrySalt...))
+	paddedSalt := paddingZero(entrySalt, 20)
 
-	hmacProcessor := hmac.New(sha1.New, compositeHash[:])
-	hmacProcessor.Write(paddedEntrySalt)
+	hmac1 := hmac.New(sha1.New, ck[:])
+	hmac1.Write(paddedSalt)
 
-	paddedEntrySalt = append(paddedEntrySalt, salt...)
-	keyComponent1 := hmac.New(sha1.New, compositeHash[:])
-	keyComponent1.Write(paddedEntrySalt)
+	k1 := hmac.New(sha1.New, ck[:])
+	k1.Write(append(paddedSalt, entrySalt...))
 
-	hmacWithSalt := append(hmacProcessor.Sum(nil), salt...)
-	keyComponent2 := hmac.New(sha1.New, compositeHash[:])
-	keyComponent2.Write(hmacWithSalt)
+	k2 := hmac.New(sha1.New, ck[:])
+	k2.Write(append(hmac1.Sum(nil), entrySalt...))
 
-	key := append(keyComponent1.Sum(nil), keyComponent2.Sum(nil)...)
-	iv := key[len(key)-8:]
-	return key[:24], iv
+	dk := append(k1.Sum(nil), k2.Sum(nil)...)
+	return dk[:24], dk[len(dk)-8:]
 }
 
 // MetaPBE Struct
@@ -107,17 +115,17 @@ func (n nssPBE) deriveKeyAndIV(globalSalt []byte) ([]byte, []byte) {
 //	      	OBJECT IDENTIFIER
 //	      	OCTET STRING (14 byte)
 //	OCTET STRING (16 byte)
-type metaPBE struct {
+type passwordCheckPBE struct {
 	AlgoAttr  algoAttr
 	Encrypted []byte
 }
 
 type algoAttr struct {
 	asn1.ObjectIdentifier
-	Data struct {
-		Data struct {
+	KDFParams struct {
+		PBKDF2 struct {
 			asn1.ObjectIdentifier
-			SlatAttr slatAttr
+			SaltAttr saltAttr
 		}
 		IVData ivAttr
 	}
@@ -128,7 +136,7 @@ type ivAttr struct {
 	IV []byte
 }
 
-type slatAttr struct {
+type saltAttr struct {
 	EntrySalt      []byte
 	IterationCount int
 	KeySize        int
@@ -137,81 +145,69 @@ type slatAttr struct {
 	}
 }
 
-func (m metaPBE) Decrypt(globalSalt []byte) ([]byte, error) {
+func (m passwordCheckPBE) Decrypt(globalSalt []byte) ([]byte, error) {
 	key, iv := m.deriveKeyAndIV(globalSalt)
-
-	return AES128CBCDecrypt(key, iv, m.Encrypted)
+	return AESCBCDecrypt(key, iv, m.Encrypted)
 }
 
-func (m metaPBE) Encrypt(globalSalt, plaintext []byte) ([]byte, error) {
+func (m passwordCheckPBE) Encrypt(globalSalt, plaintext []byte) ([]byte, error) {
 	key, iv := m.deriveKeyAndIV(globalSalt)
-
-	return AES128CBCEncrypt(key, iv, plaintext)
+	return AESCBCEncrypt(key, iv, plaintext)
 }
 
-func (m metaPBE) deriveKeyAndIV(globalSalt []byte) ([]byte, []byte) {
+func (m passwordCheckPBE) deriveKeyAndIV(globalSalt []byte) ([]byte, []byte) {
 	password := sha1.Sum(globalSalt)
 
-	salt := m.AlgoAttr.Data.Data.SlatAttr.EntrySalt
-	iter := m.AlgoAttr.Data.Data.SlatAttr.IterationCount
-	keyLen := m.AlgoAttr.Data.Data.SlatAttr.KeySize
+	params := m.AlgoAttr.KDFParams.PBKDF2.SaltAttr
+	key := PBKDF2Key(password[:], params.EntrySalt, params.IterationCount, params.KeySize, sha256.New)
 
-	key := PBKDF2Key(password[:], salt, iter, keyLen, sha256.New)
-	iv := append([]byte{4, 14}, m.AlgoAttr.Data.IVData.IV...)
+	// Firefox stores the IV with its ASN.1 OCTET STRING header (tag=0x04, length=0x0E).
+	// The full 16-byte IV = [0x04, 0x0E] + 14-byte IV value from the parsed structure.
+	iv := append([]byte{0x04, 0x0E}, m.AlgoAttr.KDFParams.IVData.IV...)
 	return key, iv
 }
 
-// loginPBE Struct
+// credentialPBE Struct
 //
 //	OCTET STRING (16 byte)
 //	SEQUENCE (2 elem)
 //			OBJECT IDENTIFIER
 //			OCTET STRING (8 byte)
 //	OCTET STRING (16 byte)
-type loginPBE struct {
-	CipherText []byte
-	Data       struct {
+type credentialPBE struct {
+	KeyCheck []byte
+	Algo     struct {
 		asn1.ObjectIdentifier
 		IV []byte
 	}
 	Encrypted []byte
 }
 
-func (l loginPBE) Decrypt(globalSalt []byte) ([]byte, error) {
-	key, iv := l.deriveKeyAndIV(globalSalt)
-	// The encryption algorithm can be reliably inferred from IV length:
-	// - 8 bytes  : 3DES-CBC (legacy Firefox versions)
-	// - 16 bytes : AES-CBC (Firefox 144+)
-	if len(iv) == 8 {
-		// Use 3DES for old Firefox versions
-		return DES3Decrypt(key[:24], iv, l.Encrypted)
-	} else if len(iv) == 16 {
-		// Firefox 144+ uses 32-byte keys (AES-256-CBC)
-		// Note: AES128CBCDecrypt is a misnomer - it actually supports all AES key lengths
-		return AES128CBCDecrypt(key, iv, l.Encrypted)
+func (l credentialPBE) Decrypt(masterKey []byte) ([]byte, error) {
+	key, iv := l.deriveKeyAndIV(masterKey)
+	// The cipher is inferred from IV length (avoids fragile OID checks):
+	switch len(iv) {
+	case des.BlockSize: // 8: 3DES-CBC (legacy Firefox)
+		return DES3Decrypt(key[:des3KeySize], iv, l.Encrypted)
+	case aes.BlockSize: // 16: AES-256-CBC (Firefox 144+)
+		return AESCBCDecrypt(key, iv, l.Encrypted)
+	default:
+		return nil, errUnsupportedIVLen
 	}
-
-	return nil, errors.New("unsupported IV length for loginPBE decryption")
 }
 
-func (l loginPBE) Encrypt(globalSalt, plaintext []byte) ([]byte, error) {
-	key, iv := l.deriveKeyAndIV(globalSalt)
-	// The encryption algorithm can be reliably inferred from IV length:
-	// - 8 bytes  : 3DES-CBC (legacy Firefox versions)
-	// - 16 bytes : AES-CBC (Firefox 144+)
-	// This avoids relying on NSS-specific OIDs, which have changed historically.
-	if len(iv) == 8 {
-		// Use 3DES for old Firefox versions
-		return DES3Encrypt(key[:24], iv, plaintext)
-	} else if len(iv) == 16 {
-		// Firefox 144+ uses 32-byte keys (AES-256-CBC)
-		// Note: AES128CBCDecrypt is a misnomer - it actually supports all AES key lengths
-		return AES128CBCEncrypt(key, iv, plaintext)
+func (l credentialPBE) Encrypt(masterKey, plaintext []byte) ([]byte, error) {
+	key, iv := l.deriveKeyAndIV(masterKey)
+	switch len(iv) {
+	case des.BlockSize:
+		return DES3Encrypt(key[:des3KeySize], iv, plaintext)
+	case aes.BlockSize:
+		return AESCBCEncrypt(key, iv, plaintext)
+	default:
+		return nil, errUnsupportedIVLen
 	}
-
-	return nil, errors.New("unsupported IV length for loginPBE encryption")
 }
 
-func (l loginPBE) deriveKeyAndIV(globalSalt []byte) ([]byte, []byte) {
-	return globalSalt, l.Data.IV
+func (l credentialPBE) deriveKeyAndIV(masterKey []byte) ([]byte, []byte) {
+	return masterKey, l.Algo.IV
 }

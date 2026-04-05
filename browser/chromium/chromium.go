@@ -3,6 +3,7 @@ package chromium
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/moond4rk/hackbrowserdata/crypto/keyretriever"
 	"github.com/moond4rk/hackbrowserdata/filemanager"
@@ -125,7 +126,7 @@ func (b *Browser) getMasterKey(session *filemanager.Session) ([]byte, error) {
 	var localStateDst string
 	for _, dir := range []string{filepath.Dir(b.profileDir), b.profileDir} {
 		candidate := filepath.Join(dir, "Local State")
-		if fileutil.IsFileExists(candidate) {
+		if fileutil.FileExists(candidate) {
 			localStateDst = filepath.Join(session.TempDir(), "Local State")
 			if err := session.Acquire(candidate, localStateDst, false); err != nil {
 				return nil, err
@@ -272,4 +273,19 @@ func isSkippedDir(name string) bool {
 		return true
 	}
 	return false
+}
+
+// timeEpoch converts a WebKit/Chromium epoch timestamp (microseconds since
+// 1601-01-01) to a time.Time.
+func timeEpoch(epoch int64) time.Time {
+	maxTime := int64(99633311740000000)
+	if epoch > maxTime {
+		return time.Date(2049, 1, 1, 1, 1, 1, 1, time.Local)
+	}
+	t := time.Date(1601, 1, 1, 0, 0, 0, 0, time.Local)
+	d := time.Duration(epoch)
+	for i := 0; i < 1000; i++ {
+		t = t.Add(d)
+	}
+	return t
 }

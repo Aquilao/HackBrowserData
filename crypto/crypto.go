@@ -1,161 +1,154 @@
 package crypto
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/des"
-	"errors"
 	"fmt"
 )
 
-var ErrCiphertextLengthIsInvalid = errors.New("ciphertext length is invalid")
-
-// AES128CBCDecrypt decrypts data using AES-CBC mode.
-// Note: Despite the function name, this supports all AES key sizes.
-// The Go standard library's aes.NewCipher automatically selects the AES variant
-// based on the key length: 16 bytes (AES-128), 24 bytes (AES-192), or 32 bytes (AES-256).
-// TODO: Rename to AESCBCDecrypt to avoid confusion about supported key lengths.
-func AES128CBCDecrypt(key, iv, ciphertext []byte) ([]byte, error) {
+// AESCBCEncrypt encrypts data using AES-CBC mode with PKCS5 padding.
+// Supports all AES key sizes: 16 bytes (AES-128), 24 bytes (AES-192), or 32 bytes (AES-256).
+func AESCBCEncrypt(key, iv, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
-	// Check ciphertext length
-	if len(ciphertext) < aes.BlockSize {
-		return nil, errors.New("AES128CBCDecrypt: ciphertext too short")
-	}
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, errors.New("AES128CBCDecrypt: ciphertext is not a multiple of the block size")
-	}
-
-	decryptedData := make([]byte, len(ciphertext))
-	mode := cipher.NewCBCDecrypter(block, iv)
-	mode.CryptBlocks(decryptedData, ciphertext)
-
-	// unpad the decrypted data and handle potential padding errors
-	decryptedData, err = pkcs5UnPadding(decryptedData)
-	if err != nil {
-		return nil, fmt.Errorf("AES128CBCDecrypt: %w", err)
-	}
-
-	return decryptedData, nil
+	return cbcEncrypt(block, iv, plaintext)
 }
 
-func AES128CBCEncrypt(key, iv, plaintext []byte) ([]byte, error) {
+// AESCBCDecrypt decrypts data using AES-CBC mode with PKCS5 unpadding.
+// Supports all AES key sizes: 16 bytes (AES-128), 24 bytes (AES-192), or 32 bytes (AES-256).
+func AESCBCDecrypt(key, iv, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
-
-	if len(iv) != aes.BlockSize {
-		return nil, errors.New("AES128CBCEncrypt: iv length is invalid, must equal block size")
-	}
-
-	plaintext = pkcs5Padding(plaintext, block.BlockSize())
-	encryptedData := make([]byte, len(plaintext))
-	mode := cipher.NewCBCEncrypter(block, iv)
-	mode.CryptBlocks(encryptedData, plaintext)
-
-	return encryptedData, nil
+	return cbcDecrypt(block, iv, ciphertext)
 }
 
-func DES3Decrypt(key, iv, ciphertext []byte) ([]byte, error) {
-	block, err := des.NewTripleDESCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(ciphertext) < des.BlockSize {
-		return nil, errors.New("DES3Decrypt: ciphertext too short")
-	}
-	if len(ciphertext)%block.BlockSize() != 0 {
-		return nil, errors.New("DES3Decrypt: ciphertext is not a multiple of the block size")
-	}
-
-	blockMode := cipher.NewCBCDecrypter(block, iv)
-	sq := make([]byte, len(ciphertext))
-	blockMode.CryptBlocks(sq, ciphertext)
-
-	return pkcs5UnPadding(sq)
-}
-
+// DES3Encrypt encrypts data using 3DES-CBC mode with PKCS5 padding.
 func DES3Encrypt(key, iv, plaintext []byte) ([]byte, error) {
 	block, err := des.NewTripleDESCipher(key)
 	if err != nil {
 		return nil, err
 	}
-
-	plaintext = pkcs5Padding(plaintext, block.BlockSize())
-	dst := make([]byte, len(plaintext))
-	blockMode := cipher.NewCBCEncrypter(block, iv)
-	blockMode.CryptBlocks(dst, plaintext)
-
-	return dst, nil
+	return cbcEncrypt(block, iv, plaintext)
 }
 
-// AESGCMDecrypt chromium > 80 https://source.chromium.org/chromium/chromium/src/+/master:components/os_crypt/sync/os_crypt_win.cc
-func AESGCMDecrypt(key, nounce, ciphertext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+// DES3Decrypt decrypts data using 3DES-CBC mode with PKCS5 unpadding.
+func DES3Decrypt(key, iv, ciphertext []byte) ([]byte, error) {
+	block, err := des.NewTripleDESCipher(key)
 	if err != nil {
 		return nil, err
 	}
-	blockMode, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	origData, err := blockMode.Open(nil, nounce, ciphertext, nil)
-	if err != nil {
-		return nil, err
-	}
-	return origData, nil
+	return cbcDecrypt(block, iv, ciphertext)
 }
 
-// AESGCMEncrypt encrypts plaintext using AES encryption in GCM mode.
+// AESGCMEncrypt encrypts data using AES-GCM mode.
 func AESGCMEncrypt(key, nonce, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
-	blockMode, err := cipher.NewGCM(block)
+	aead, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
-	// The first parameter is the prefix for the output, we can leave it nil.
-	// The Seal method encrypts and authenticates the data, appending the result to the dst.
-	encryptedData := blockMode.Seal(nil, nonce, plaintext, nil)
-	return encryptedData, nil
+	if len(nonce) != aead.NonceSize() {
+		return nil, errInvalidNonceLen
+	}
+	return aead.Seal(nil, nonce, plaintext, nil), nil
 }
 
+// AESGCMDecrypt decrypts data using AES-GCM mode.
+func AESGCMDecrypt(key, nonce, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(nonce) != aead.NonceSize() {
+		return nil, errInvalidNonceLen
+	}
+	return aead.Open(nil, nonce, ciphertext, nil)
+}
+
+// cbcEncrypt adds PKCS5 padding and encrypts plaintext in CBC mode.
+func cbcEncrypt(block cipher.Block, iv, plaintext []byte) ([]byte, error) {
+	if len(iv) != block.BlockSize() {
+		return nil, errInvalidIVLength
+	}
+
+	padded := pkcs5Padding(plaintext, block.BlockSize())
+	dst := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(dst, padded)
+	return dst, nil
+}
+
+// cbcDecrypt decrypts ciphertext in CBC mode and removes PKCS5 padding.
+func cbcDecrypt(block cipher.Block, iv, ciphertext []byte) ([]byte, error) {
+	bs := block.BlockSize()
+	if len(iv) != bs {
+		return nil, errInvalidIVLength
+	}
+	if len(ciphertext) < bs {
+		return nil, errShortCiphertext
+	}
+	if len(ciphertext)%bs != 0 {
+		return nil, errInvalidBlockSize
+	}
+
+	dst := make([]byte, len(ciphertext))
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(dst, ciphertext)
+
+	dst, err := pkcs5UnPadding(dst, bs)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+	return dst, nil
+}
+
+// paddingZero pads src with zero bytes to the given length.
+// Returns src unchanged if already long enough; otherwise returns a new slice.
 func paddingZero(src []byte, length int) []byte {
-	padding := length - len(src)
-	if padding <= 0 {
+	if len(src) >= length {
 		return src
 	}
-	return append(src, make([]byte, padding)...)
+	dst := make([]byte, length)
+	copy(dst, src)
+	return dst
 }
 
-func pkcs5UnPadding(src []byte) ([]byte, error) {
+// pkcs5Padding adds PKCS5/PKCS7 padding to src.
+// Always returns a new slice; never modifies src.
+func pkcs5Padding(src []byte, blockSize int) []byte {
+	n := blockSize - (len(src) % blockSize)
+	dst := make([]byte, len(src)+n)
+	copy(dst, src)
+	for i := len(src); i < len(dst); i++ {
+		dst[i] = byte(n)
+	}
+	return dst
+}
+
+// pkcs5UnPadding removes PKCS5/PKCS7 padding from src.
+func pkcs5UnPadding(src []byte, blockSize int) ([]byte, error) {
 	length := len(src)
 	if length == 0 {
-		return nil, errors.New("pkcs5UnPadding: src should not be empty")
+		return nil, errInvalidPadding
 	}
 	padding := int(src[length-1])
-	if padding < 1 || padding > aes.BlockSize {
-		return nil, errors.New("pkcs5UnPadding: invalid padding size")
-	}
-	if padding > length {
-		return nil, errors.New("pkcs5UnPadding: invalid padding length")
+	if padding < 1 || padding > blockSize || padding > length {
+		return nil, errInvalidPadding
 	}
 	for _, b := range src[length-padding:] {
 		if int(b) != padding {
-			return nil, errors.New("pkcs5UnPadding: invalid padding content")
+			return nil, errInvalidPadding
 		}
 	}
 	return src[:length-padding], nil
-}
-
-func pkcs5Padding(src []byte, blocksize int) []byte {
-	padding := blocksize - (len(src) % blocksize)
-	padText := bytes.Repeat([]byte{byte(padding)}, padding)
-	return append(src, padText...)
 }

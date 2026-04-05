@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/moond4rk/hackbrowserdata/filemanager"
 	"github.com/moond4rk/hackbrowserdata/log"
@@ -106,7 +107,7 @@ func (b *Browser) acquireFiles(session *filemanager.Session, categories []types.
 // is validated by attempting to decrypt an actual login entry.
 func (b *Browser) getMasterKey(session *filemanager.Session, tempPaths map[types.Category]string) ([]byte, error) {
 	key4Src := filepath.Join(b.profileDir, "key4.db")
-	if !fileutil.IsFileExists(key4Src) {
+	if !fileutil.FileExists(key4Src) {
 		return nil, nil
 	}
 	key4Dst := filepath.Join(session.TempDir(), "key4.db")
@@ -235,4 +236,13 @@ func resolveSourcePaths(sources map[types.Category][]sourcePath, profileDir stri
 		}
 	}
 	return resolved
+}
+
+// timestamp converts a Unix epoch timestamp (seconds) to a time.Time.
+func timestamp(stamp int64) time.Time {
+	s := time.Unix(stamp, 0)
+	if s.Local().Year() > 9999 {
+		return time.Date(9999, 12, 13, 23, 59, 59, 0, time.Local)
+	}
+	return s
 }
