@@ -69,6 +69,12 @@ func platformBrowsers() []types.BrowserConfig {
 			UserDataDir: homeDir + "/AppData/Local/Yandex/YandexBrowser/User Data",
 		},
 		{
+			Key:         "360x",
+			Name:        speed360XName,
+			Kind:        types.KindChromium,
+			UserDataDir: homeDir + "/AppData/Local/360ChromeX/Chrome/User Data",
+		},
+		{
 			Key:         "360",
 			Name:        speed360Name,
 			Kind:        types.KindChromium,
@@ -90,7 +96,7 @@ func platformBrowsers() []types.BrowserConfig {
 			Key:         "sogou",
 			Name:        sogouName,
 			Kind:        types.KindChromium,
-			UserDataDir: homeDir + "/AppData/Roaming/SogouExplorer/Webkit",
+			UserDataDir: homeDir + "/AppData/Local/Sogou/SogouExplorer/User Data",
 		},
 		{
 			Key:         "firefox",
