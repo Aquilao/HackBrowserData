@@ -5,6 +5,11 @@ import (
 	"fmt"
 )
 
+// errStorageNotFound is returned when the requested browser storage
+// account is not found in the credential store (keychain, keyring, etc.).
+// Only used on darwin and linux; Windows uses DPAPI which has no storage lookup.
+var errStorageNotFound = errors.New("not found in credential store") //nolint:unused // only used on darwin and linux
+
 // KeyRetriever retrieves the master encryption key for a Chromium-based browser.
 // Each platform has different implementations:
 //   - macOS: Keychain access (security command) or gcoredump exploit
