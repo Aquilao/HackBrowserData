@@ -191,7 +191,8 @@ Please see the [Contribution Guide](CONTRIBUTING.md) before contributing.
 
 ## Contributors
 
-![](/CONTRIBUTORS.svg)
+<!-- readme: collaborators,contributors -start -->
+<!-- readme: collaborators,contributors -end -->
 
 ## Stargazers over time
 [![Star History Chart](https://api.star-history.com/svg?repos=moond4rk/hackbrowserdata&type=Date)](https://github.com/moond4rk/HackBrowserData)
