@@ -8,6 +8,7 @@ import (
 
 	"github.com/moond4rk/hackbrowserdata/browser/chromium"
 	"github.com/moond4rk/hackbrowserdata/browser/firefox"
+	"github.com/moond4rk/hackbrowserdata/crypto/keyretriever"
 	"github.com/moond4rk/hackbrowserdata/log"
 	"github.com/moond4rk/hackbrowserdata/types"
 )
@@ -34,12 +35,19 @@ func PickBrowsers(opts PickOptions) ([]Browser, error) {
 	return pickFromConfigs(platformBrowsers(), opts)
 }
 
-// pickFromConfigs is the testable core of PickBrowsers.
+// pickFromConfigs is the testable core of PickBrowsers. It iterates over
+// platform browser configs, discovers installed profiles, and injects a
+// shared key retriever into Chromium browsers for decryption.
 func pickFromConfigs(configs []types.BrowserConfig, opts PickOptions) ([]Browser, error) {
 	name := strings.ToLower(opts.Name)
 	if name == "" {
 		name = "all"
 	}
+
+	// Create a single key retriever shared across all Chromium browsers.
+	// On macOS this avoids repeated password prompts; on other platforms
+	// it's harmless (DPAPI reads Local State per-profile, D-Bus is stateless).
+	retriever := keyretriever.DefaultRetriever(opts.KeychainPassword)
 
 	var browsers []Browser
 	for _, cfg := range configs {
@@ -47,6 +55,7 @@ func pickFromConfigs(configs []types.BrowserConfig, opts PickOptions) ([]Browser
 			continue
 		}
 
+		// Override profile directory when targeting a specific browser.
 		if opts.ProfilePath != "" && name != "all" {
 			if cfg.Kind == types.Firefox {
 				cfg.UserDataDir = filepath.Dir(filepath.Clean(opts.ProfilePath))
@@ -55,48 +64,60 @@ func pickFromConfigs(configs []types.BrowserConfig, opts PickOptions) ([]Browser
 			}
 		}
 
-		if opts.KeychainPassword != "" {
-			cfg.KeychainPassword = opts.KeychainPassword
-		}
-
-		bs, err := newBrowsers(cfg)
+		found, err := newBrowsers(cfg)
 		if err != nil {
 			log.Errorf("browser %s: %v", cfg.Name, err)
 			continue
 		}
-		if len(bs) == 0 {
+		if len(found) == 0 {
 			log.Debugf("browser %s not found at %s", cfg.Name, cfg.UserDataDir)
 			continue
 		}
-		browsers = append(browsers, bs...)
+
+		// Inject the shared key retriever into browsers that need it.
+		// Chromium browsers implement retrieverSetter; Firefox does not.
+		for _, b := range found {
+			if setter, ok := b.(retrieverSetter); ok {
+				setter.SetRetriever(retriever)
+			}
+		}
+		browsers = append(browsers, found...)
 	}
 	return browsers, nil
 }
 
-// newBrowsers dispatches to the correct engine based on BrowserKind.
+// retrieverSetter is implemented by browsers that need an external key retriever.
+// This allows pickFromConfigs to inject the shared retriever after construction
+// without coupling the Browser interface to Chromium-specific concerns.
+type retrieverSetter interface {
+	SetRetriever(keyretriever.KeyRetriever)
+}
+
+// newBrowsers dispatches to the correct engine based on BrowserKind
+// and converts engine-specific types to the Browser interface.
 func newBrowsers(cfg types.BrowserConfig) ([]Browser, error) {
 	switch cfg.Kind {
 	case types.Chromium, types.ChromiumYandex, types.ChromiumOpera:
-		bs, err := chromium.NewBrowsers(cfg)
+		found, err := chromium.NewBrowsers(cfg)
 		if err != nil {
 			return nil, err
 		}
-		browsers := make([]Browser, len(bs))
-		for i, b := range bs {
-			browsers[i] = b
+		result := make([]Browser, len(found))
+		for i, b := range found {
+			result[i] = b
 		}
-		return browsers, nil
+		return result, nil
 
 	case types.Firefox:
-		bs, err := firefox.NewBrowsers(cfg)
+		found, err := firefox.NewBrowsers(cfg)
 		if err != nil {
 			return nil, err
 		}
-		browsers := make([]Browser, len(bs))
-		for i, b := range bs {
-			browsers[i] = b
+		result := make([]Browser, len(found))
+		for i, b := range found {
+			result[i] = b
 		}
-		return browsers, nil
+		return result, nil
 
 	default:
 		return nil, fmt.Errorf("unknown browser kind: %d", cfg.Kind)

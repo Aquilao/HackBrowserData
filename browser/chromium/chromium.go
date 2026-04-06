@@ -1,6 +1,7 @@
 package chromium
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,15 +17,15 @@ import (
 type Browser struct {
 	cfg         types.BrowserConfig
 	profileDir  string                               // absolute path to profile directory
-	retriever   keyretriever.KeyRetriever            // shared across profiles of the same browser
+	retriever   keyretriever.KeyRetriever            // set via SetRetriever after construction
 	sources     map[types.Category][]sourcePath      // Category → candidate paths (priority order)
 	extractors  map[types.Category]categoryExtractor // Category → custom extract function override
 	sourcePaths map[types.Category]resolvedPath      // Category → discovered absolute path
 }
 
 // NewBrowsers discovers Chromium profiles under cfg.UserDataDir and returns
-// one Browser per profile. Uses ReadDir to find profile directories,
-// then Stat to check which data sources exist in each profile.
+// one Browser per profile. Call SetRetriever on each returned browser before
+// Extract to enable decryption of sensitive data (passwords, cookies, etc.).
 func NewBrowsers(cfg types.BrowserConfig) ([]*Browser, error) {
 	sources := sourcesForKind(cfg.Kind)
 	extractors := extractorsForKind(cfg.Kind)
@@ -33,11 +34,6 @@ func NewBrowsers(cfg types.BrowserConfig) ([]*Browser, error) {
 	if len(profileDirs) == 0 {
 		return nil, nil
 	}
-
-	// Create the key retriever once and share it across all profiles.
-	// This avoids repeated keychain password prompts on macOS, where each
-	// profile would otherwise trigger a separate `security` command dialog.
-	retriever := keyretriever.DefaultRetriever(cfg.KeychainPassword)
 
 	var browsers []*Browser
 	for _, profileDir := range profileDirs {
@@ -48,13 +44,19 @@ func NewBrowsers(cfg types.BrowserConfig) ([]*Browser, error) {
 		browsers = append(browsers, &Browser{
 			cfg:         cfg,
 			profileDir:  profileDir,
-			retriever:   retriever,
 			sources:     sources,
 			extractors:  extractors,
 			sourcePaths: sourcePaths,
 		})
 	}
 	return browsers, nil
+}
+
+// SetRetriever sets the key retriever used by Extract to obtain the
+// master encryption key. Must be called before Extract if encrypted
+// data (passwords, cookies, credit cards) needs to be decrypted.
+func (b *Browser) SetRetriever(r keyretriever.KeyRetriever) {
+	b.retriever = r
 }
 
 func (b *Browser) BrowserName() string { return b.cfg.Name }
@@ -120,6 +122,10 @@ func (b *Browser) acquireFiles(session *filemanager.Session, categories []types.
 // The retriever is always called regardless of whether Local State exists,
 // because macOS/Linux retrievers don't need it.
 func (b *Browser) getMasterKey(session *filemanager.Session) ([]byte, error) {
+	if b.retriever == nil {
+		return nil, fmt.Errorf("key retriever not set for %s", b.cfg.Name)
+	}
+
 	// Try to locate and copy Local State (needed on Windows, ignored on macOS/Linux).
 	// Multi-profile layout: Local State is in the parent of profileDir.
 	// Flat layout (Opera): Local State is alongside data files in profileDir.
