@@ -65,43 +65,61 @@ Each category has a corresponding Entry struct with `json` and `csv` struct tags
 
 ### 4.1 BrowserKind
 
-Four engine kinds determine source paths and extractors:
+Each config declares an engine kind that determines source paths and extraction logic. Kinds fall into three engine families:
 
-| Kind | Description |
-|------|-------------|
-| `Chromium` | Standard Chromium layout |
-| `ChromiumYandex` | Yandex variant: different file names and SQL queries |
-| `ChromiumOpera` | Opera variant: different extension key, Roaming path on Windows |
-| `Firefox` | Firefox: NSS encryption, SQLite + JSON files |
+- **Chromium** (`Chromium`, `ChromiumYandex`, `ChromiumOpera`) — the standard Chromium layout plus two variants that override file names or storage paths for Yandex and Opera forks. See RFC-003.
+- **Firefox** — NSS-based key derivation from `key4.db`, SQLite + JSON source files. See RFC-005.
+- **Safari** — macOS only, with direct Keychain-based credential extraction. See RFC-006 §7.
+
+See `types/category.go` for the authoritative enum definition.
 
 ### 4.2 BrowserConfig
 
 `BrowserConfig` is the declarative, platform-specific browser definition containing: Key (CLI matching), Name (display), Kind (engine), Storage (keychain label), UserDataDir (data path).
 
-### 4.3 PickBrowsers() Flow
+### 4.3 Browser Selection Flow
+
+There are two entry points, one for extraction and one for discovery:
 
 ```
-PickBrowsers(opts)
-  → platformBrowsers()              // build-tagged: returns []BrowserConfig for this OS
-  → pickFromConfigs(configs, opts)   // filter by name, apply profile-path/keychain overrides
-      → newBrowsers(cfg)             // dispatch by Kind to chromium.NewBrowsers or firefox.NewBrowsers
-          → discoverProfiles()       // scan for profile subdirectories
-          → resolveSourcePaths()     // stat each candidate path, first match wins
+PickBrowsers(opts)                    // used by `dump` — ready to Extract
+  → pickFromConfigs(configs, opts)     // shared discovery core
+      → platformBrowsers()             // build-tagged list for this OS
+      → filter by name / profile path
+      → newBrowsers(cfg)                // dispatch to chromium/firefox/safari.NewBrowsers
+          → discoverProfiles()          // scan profile subdirectories
+          → resolveSourcePaths()        // stat candidates, first match wins
+  → newPlatformInjector(opts)          // build-tagged: returns a func(Browser)
+      → for each browser:               // closure captures retriever + keychain pw lazily
+          inject(b)                     // type-assert retrieverSetter / keychainPasswordSetter
+
+DiscoverBrowsers(opts)                 // used by `list` / `list --detail`
+  → pickFromConfigs(configs, opts)     // same shared discovery core, NO injection
 ```
+
+`PickBrowsers` does discovery + decryption setup in one call; the returned
+browsers are ready for `b.Extract`. `DiscoverBrowsers` skips injection
+entirely, so list-style commands never trigger the macOS Keychain password
+prompt — they have no use for the credential. Both entry points share the
+same `pickFromConfigs` core, so filtering/profile-path/glob semantics stay
+consistent.
 
 Key design decisions:
 
-- **One KeyRetriever per browser** — created once and shared across all profiles to prevent repeated keychain prompts on macOS.
+- **One KeyRetriever chain per process** — built lazily inside `newPlatformInjector` and reused across every Chromium browser and every profile to prevent repeated keychain prompts on macOS.
+- **Discovery is decoupled from injection** — `pickFromConfigs` is injection-free; `DiscoverBrowsers` stops after it, `PickBrowsers` continues into injection.
 - **Profile discovery differs by engine**: Chromium looks for `Preferences` files in subdirectories; Firefox accepts any subdirectory containing known source files.
 - **Flat layout fallback** — Opera-style browsers that store data directly in UserDataDir (no profile subdirectories) are handled by falling back to the base directory.
 
 ### 4.4 Platform Browser Lists
 
-Browser configs are defined per-platform via build tags:
+Browser configs are defined per-platform via build tags in `platformBrowsers()` (`browser/browser_{darwin,linux,windows}.go`). The supported set groups by engine family:
 
-- **macOS** — 12 browsers (Chrome, Edge, Chromium, Chrome Beta, Opera, OperaGX, Vivaldi, CocCoc, Brave, Yandex, Arc, Firefox)
-- **Windows** — 16 browsers (all macOS minus Arc, plus 360 Speed, 360 Speed X, QQ, DC, Sogou)
-- **Linux** — 8 browsers (Chrome, Edge, Chromium, Chrome Beta, Opera, Vivaldi, Brave, Firefox)
+- **Chromium-based** — the largest family, covering mainstream browsers (Chrome, Edge, Brave, Vivaldi, Opera, Chromium) across all three platforms plus regional variants and forks. Windows carries the longest list because of China-region Chromium forks (360, QQ, Sogou, DC, …) and MSIX-packaged browsers with dynamic install paths (Arc, DuckDuckGo).
+- **Firefox** — all three platforms, via internal NSS key derivation (RFC-005).
+- **Safari** — macOS only, via direct Keychain `InternetPassword` extraction (RFC-006 §7).
+
+Adding a new browser is a config-only change in `platformBrowsers()`; this section does not need updates for new variants within an existing family.
 
 ## 5. Extract() Orchestration
 
