@@ -39,3 +39,26 @@ payload-verify: $(ABE_BIN)
 
 payload-clean:
 	rm -f $(ABE_BIN_DIR)/abe_extractor_*.bin
+
+# Scratch-layout codegen. The C header bootstrap_layout.h is the single
+# source of truth; the Go constants in crypto/windows/abe_native/bootstrap
+# are derived from it via cgo -godefs. We pin CC to zig for reproducible
+# output across macOS / Linux / Windows hosts.
+ABE_LAYOUT_PKG = $(ABE_SRC_DIR)/bootstrap
+ABE_LAYOUT_GO  = $(ABE_LAYOUT_PKG)/layout.go
+
+.PHONY: gen-layout gen-layout-verify
+
+# Split into two stages so a cgo failure doesn't silently produce an empty
+# layout.go via `gofmt` on empty stdin. Write cgo output to a temp file first;
+# only if that step succeeds do we format and publish.
+gen-layout:
+	cd $(ABE_LAYOUT_PKG) && \
+	  CC="$(ZIG) cc" $(GO) tool cgo -godefs layout_gen.go > layout.go.tmp && \
+	  gofmt layout.go.tmp > layout.go && \
+	  rm -f layout.go.tmp && \
+	  rm -rf _obj
+
+gen-layout-verify: gen-layout
+	@git diff --exit-code $(ABE_LAYOUT_GO) >/dev/null || \
+	  (echo "layout.go is stale — run 'make gen-layout' and commit"; exit 1)
